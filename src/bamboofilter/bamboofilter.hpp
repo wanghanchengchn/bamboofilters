@@ -1,21 +1,29 @@
-#include "bamboofilter/bitsutil.h"
-#include "common/BOBHash.h"
-#include "bamboofilter/segment.hpp"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <cmath>
+#include <iostream>
+#include <vector>
+
 #include "bamboofilter/predefine.h"
+#include "bamboofilter/segment.hpp"
+#include "common/BOBHash.h"
 
-using namespace std;
+using std::vector;
 
-template <uint32_t bits_per_item>
 class BambooFilter
 {
 public:
-    uint32_t num_items_;
-    uint32_t next_point_;
+    const uint32_t INIT_TABLE_BITS;
     uint32_t num_table_bits_;
 
-    uint32_t INIT_TABLE_BITS;
+    vector<Segment *> hash_table_;
 
-    vector<Segment<bits_per_item> *> segments_;
+    uint32_t split_condition_;
+
+    uint32_t next_split_idx_;
+    uint32_t num_items_;
 
     inline uint32_t BucketIndexHash(uint32_t index) const
     {
@@ -29,62 +37,38 @@ public:
 
     inline uint32_t TagHash(uint32_t tag) const
     {
-        return tag & ((1 << bits_per_item) - 1);
+        return tag & FINGUREPRINT_MASK;
     }
 
-    inline size_t AltIndex(const size_t index, const uint32_t tag) const
-    {
-        return BucketIndexHash((uint32_t)(index ^ tag));
-    }
-
-    inline void GenerateIndexTagHash(const char *item, uint32_t *bucket_index, uint32_t *seg_index, uint32_t *tag) const
+    inline void GenerateIndexTagHash(const char *item, uint32_t &seg_index, uint32_t &bucket_index, uint32_t &tag) const
     {
         const uint32_t hash = BOBHash::run(item, strlen(item), 3);
 
-        *bucket_index = BucketIndexHash(hash);
-        *seg_index = SegIndexHash(hash >> BUCKETS_PER_SEG);
-        *tag = TagHash(hash >> INIT_TABLE_BITS);
+        bucket_index = BucketIndexHash(hash);
+        seg_index = SegIndexHash(hash >> BUCKETS_PER_SEG);
+        tag = TagHash(hash >> INIT_TABLE_BITS);
 
-        if (!(*tag))
+        if (!(tag))
         {
             if (num_table_bits_ > INIT_TABLE_BITS)
             {
-                *seg_index |= (1 << (INIT_TABLE_BITS - BUCKETS_PER_SEG));
+                seg_index |= (1 << (INIT_TABLE_BITS - BUCKETS_PER_SEG));
             }
-            *tag = *tag + 1;
+            tag++;
         }
 
-        if (*seg_index >= segments_.size())
+        if (seg_index >= hash_table_.size())
         {
-            *seg_index = *seg_index - (1 << (NUM_SEG_BITS - 1));
+            seg_index = seg_index - (1 << (NUM_SEG_BITS - 1));
         }
     }
 
 public:
-    BambooFilter(uint32_t exp_items_)
-    {
-        num_items_ = 0;
-        next_point_ = 0;
+    BambooFilter(uint32_t capacity, uint32_t split_condition_param);
 
-        INIT_TABLE_BITS = ceil(log2((double)(exp_items_ / 4)));
+    ~BambooFilter();
 
-        num_table_bits_ = INIT_TABLE_BITS;
-
-        for (int num_seg = 0; num_seg < (1 << NUM_SEG_BITS); num_seg++)
-        {
-            segments_.push_back(new Segment<bits_per_item>(1 << BUCKETS_PER_SEG));
-        }
-    }
-
-    ~BambooFilter()
-    {
-        for (uint32_t idx = 0; idx < segments_.size(); idx++)
-        {
-            delete segments_[idx];
-        }
-    }
-
-    void Insert(const char *key);
+    bool Insert(const char *key);
     bool Lookup(const char *key) const;
     bool Delete(const char *key);
 
@@ -92,49 +76,64 @@ public:
     void Compress();
 };
 
-template <uint32_t bits_per_item>
-void BambooFilter<bits_per_item>::Insert(const char *key)
+BambooFilter::BambooFilter(uint32_t capacity, uint32_t split_condition_param)
+    : INIT_TABLE_BITS((uint32_t)ceil(log2((double)(capacity / 4))))
 {
-    uint32_t bucket_index, seg_index, tag;
+    num_table_bits_ = INIT_TABLE_BITS;
 
-    GenerateIndexTagHash(key, &bucket_index, &seg_index, &tag);
-
-    segments_[seg_index]->Insert(bucket_index, tag);
-
-    num_items_++;
-
-    if (!(num_items_ & SPLIT_CONDITION))
+    for (int num_segment = 0; num_segment < (1 << NUM_SEG_BITS); num_segment++)
     {
-        Extend();
+        hash_table_.push_back(new Segment(1 << BUCKETS_PER_SEG));
+    }
+
+    split_condition_ = uint32_t(split_condition_param * 4 * (1 << BUCKETS_PER_SEG)) - 1;
+    next_split_idx_ = 0;
+    num_items_ = 0;
+}
+
+BambooFilter::~BambooFilter()
+{
+    for (uint32_t segment_idx = 0; segment_idx < hash_table_.size(); segment_idx++)
+    {
+        delete hash_table_[segment_idx];
     }
 }
 
-template <uint32_t bits_per_item>
-bool BambooFilter<bits_per_item>::Lookup(const char *key) const
+bool BambooFilter::Insert(const char *key)
 {
-    uint32_t seg_index, first_bucket, second_bucket, tag;
+    uint32_t seg_index, bucket_index, tag;
 
-    GenerateIndexTagHash(key, &first_bucket, &seg_index, &tag);
+    GenerateIndexTagHash(key, seg_index, bucket_index, tag);
 
-    second_bucket = AltIndex(first_bucket, tag);
+    hash_table_[seg_index]->Insert(bucket_index, tag);
 
-    return segments_[seg_index]->Search(first_bucket, second_bucket, tag);
+    num_items_++;
+
+    if (!(num_items_ & split_condition_))
+    {
+        Extend();
+    }
+
+    return true;
 }
 
-template <uint32_t bits_per_item>
-bool BambooFilter<bits_per_item>::Delete(const char *key)
+bool BambooFilter::Lookup(const char *key) const
 {
-    uint32_t seg_index, first_bucket, second_bucket, tag;
+    uint32_t seg_index, bucket_index, tag;
 
-    GenerateIndexTagHash(key, &first_bucket, &seg_index, &tag);
+    GenerateIndexTagHash(key, seg_index, bucket_index, tag);
+    return hash_table_[seg_index]->Lookup(bucket_index, tag);
+}
 
-    second_bucket = AltIndex(first_bucket, tag);
+bool BambooFilter::Delete(const char *key)
+{
+    uint32_t seg_index, bucket_index, tag;
+    GenerateIndexTagHash(key, seg_index, bucket_index, tag);
 
-    if (segments_[seg_index]->DeleteTagFromBuckets(first_bucket, second_bucket, tag))
+    if (hash_table_[seg_index]->Delete(bucket_index, tag))
     {
         num_items_--;
-
-        if (!(num_items_ & SPLIT_CONDITION))
+        if (!(num_items_ & split_condition_))
         {
             Compress();
         }
@@ -146,41 +145,38 @@ bool BambooFilter<bits_per_item>::Delete(const char *key)
     }
 }
 
-template <uint32_t bits_per_item>
-void BambooFilter<bits_per_item>::Extend()
+void BambooFilter::Extend()
 {
-    segments_.push_back(new Segment<bits_per_item>(1 << BUCKETS_PER_SEG));
+    Segment *src = hash_table_[next_split_idx_];
+    Segment *dst = new Segment(*src);
+    hash_table_.push_back(dst);
 
-    uint32_t num_seg_bits_ = ceil(log2((double)segments_.size()));
-
+    uint32_t num_seg_bits_ = (uint32_t)ceil(log2((double)hash_table_.size()));
     num_table_bits_ = num_seg_bits_ + BUCKETS_PER_SEG;
 
-    segments_[next_point_]->Rehash(segments_[(next_point_ | (1 << (num_seg_bits_ - 1)))], (ACTV_TAG_BIT - 1));
+    src->EraseEle(true, ACTV_TAG_BIT - 1);
+    dst->EraseEle(false, ACTV_TAG_BIT - 1);
 
-    next_point_++;
-
-    if (next_point_ == (1UL << (num_seg_bits_ - 1)))
+    next_split_idx_++;
+    if (next_split_idx_ == (1UL << (num_seg_bits_ - 1)))
     {
-        next_point_ = 0;
+        next_split_idx_ = 0;
     }
 }
 
-template <uint32_t bits_per_item>
-void BambooFilter<bits_per_item>::Compress()
+void BambooFilter::Compress()
 {
-    uint32_t num_seg_bits_ = ceil(log2((double)(segments_.size() - 1)));
-
+    uint32_t num_seg_bits_ = (uint32_t)ceil(log2((double)(hash_table_.size() - 1)));
     num_table_bits_ = num_seg_bits_ + BUCKETS_PER_SEG;
-
-    if (!next_point_)
+    if (!next_split_idx_)
     {
-        next_point_ = (1UL << (num_seg_bits_ - 1));
+        next_split_idx_ = (1UL << (num_seg_bits_ - 1));
     }
+    next_split_idx_--;
 
-    next_point_--;
-
-    segments_[next_point_]->Compress(segments_[segments_.size() - 1]);
-
-    delete segments_[segments_.size() - 1];
-    segments_.pop_back();
+    Segment *src = hash_table_[next_split_idx_];
+    Segment *dst = hash_table_.back();
+    src->Absorb(dst);
+    delete dst;
+    hash_table_.pop_back();
 }

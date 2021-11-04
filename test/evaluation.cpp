@@ -16,15 +16,18 @@
 #include <openssl/rand.h>
 
 #include "bamboofilter/bamboofilter.hpp"
+#include "bamboofilter/bitsutil.h"
 
 #include "common/random.h"
 #include "common/timing.h"
+
+#define loop(x, a, b) for (uint64_t x = a; x < b; ++x)
 
 using namespace std;
 
 int main(int argc, char *argv[])
 {
-    size_t add_count = 65536;
+    size_t add_count = 200000 * 7;
 
     cout << "Prepare..." << endl;
 
@@ -33,26 +36,23 @@ int main(int argc, char *argv[])
 
     cout << "Begin test" << endl;
 
-    BambooFilter<12> *l = new BambooFilter<12>(add_count);
-
-    auto start_time = NowNanos();
-
-    for (uint64_t added = 0; added < add_count; added++)
+    for (auto exp_idx = 1; exp_idx <= 7; exp_idx++)
     {
-        l->Insert(to_add[added].c_str());
-    }
+        auto add_count = exp_idx * 200000;
 
-    cout << ((add_count * 1000.0) / static_cast<double>(NowNanos() - start_time)) << endl;
-
-    start_time = NowNanos();
-    for (uint64_t added = 0; added < add_count; added++)
-    {
-        if (!l->Lookup(to_add[added].c_str()))
+        BambooFilter *bbf = new BambooFilter(upperpower2(200000), 2);
+        for (uint64_t added = 0; added < add_count; added++)
         {
-            throw logic_error("False Negative");
+            bbf->Insert(to_add[added].c_str());
         }
+
+        auto start_time = NowNanos();
+        for (uint64_t added = 0; added < add_count; added++)
+        {
+            bbf->Lookup(to_add[added].c_str());
+        }
+        cout << ((add_count * 1000.0) / static_cast<double>(NowNanos() - start_time)) << endl;
     }
-    cout << ((add_count * 1000.0) / static_cast<double>(NowNanos() - start_time)) << endl;
 
     return 0;
 }
