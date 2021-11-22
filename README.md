@@ -25,6 +25,6 @@ make
 
 ## Results
 
-<img src="figures.png" style="zoom:24%;" />
-
 Our results show that bamboo filters have the highest insertion throughput, positive lookup throughput, and deletion throughput even after multiple resizing operations. Moreover, bamboo filters have the lowest positive/negative lookup and deletion throughput decline rate.
+
+<img src="figures.png" style="zoom:24%;" />
