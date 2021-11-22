@@ -22,3 +22,9 @@ make
 |SBF|K. Xie, Y. Min, D. Zhang, J. Wen, and G. Xie, “A Scalable Bloom Filter for Membership Queries,” in Proceedings of the Global Communications Conference. IEEE, 2007, pp. 543–547. Implementation: https://github.com/Dustin-He/ElasticBloomFilter/blob/master/ScalableBF.h|
 |DCF|H. Chen, L. Liao, H. Jin, and J. Wu, “The Dynamic Cuckoo Filter,” in Proceedings of International Conference on Network Protocols. IEEE, 2017, pp. 1–10. Implementation: https://github.com/CGCL-codes/DCF|
 |SuRF|H. Zhang, H. Lim, V. Leis, D. G. Andersen, M. Kaminsky, K. Keeton, and A. Pavlo, “SuRF: Practical Range Query Filtering with Fast Succinct Tries,” in Proceedings of International Conference on Management of Data. ACM, 2018, pp. 323–336. Implementation: https://github.com/efficient/SuRF|
+
+## results
+
+<img src="figures.png" style="zoom:24%;" />
+
+Our results show that bamboo filters have the highest insertion throughput, positive lookup throughput, and deletion throughput even after multiple resizing operations. Moreover, bamboo filters have the lowest positive/negative lookup and deletion throughput decline rate.
